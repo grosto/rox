@@ -1,7 +1,12 @@
+mod ast;
+mod interpreter;
+mod parser;
 mod scanner;
 
+use crate::interpreter::evaluate_stmt;
 use crate::scanner::Scanner;
 use anyhow::Result;
+use parser::Parser;
 use std::env;
 use std::fs;
 use std::io;
@@ -29,8 +34,11 @@ fn run_file(file_path: &path::Path) -> Result<()> {
 
 fn run(source: String) {
     let scanner = Scanner::new(&source);
-    for token in scanner {
-        println!("{:?}", token);
+    let mut parser = Parser::new(scanner);
+    let statements = parser.parse().expect("something went wrong parsing");
+
+    for statement in statements {
+        evaluate_stmt(statement).expect("Error while evaluation");
     }
 }
 
