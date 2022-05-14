@@ -47,7 +47,6 @@ impl<'a> Scanner<'a> {
             ' ' => return self.scan_token(),
             '\n' => {
                 self.line += 1;
-                self.advance();
                 return self.scan_token();
             }
             '(' => self.create_token(TokenKind::LeftParen, c),
@@ -55,8 +54,8 @@ impl<'a> Scanner<'a> {
             '+' => self.create_token(TokenKind::Plus, c),
             '-' => self.create_token(TokenKind::Minus, c),
             '*' => self.create_token(TokenKind::Star, c),
-            '[' => self.create_token(TokenKind::LeftBrace, c),
-            ']' => self.create_token(TokenKind::RightBrace, c),
+            '{' => self.create_token(TokenKind::LeftBrace, c),
+            '}' => self.create_token(TokenKind::RightBrace, c),
             ',' => self.create_token(TokenKind::Comma, c),
             '.' => self.create_token(TokenKind::Dot, c),
             ';' => self.create_token(TokenKind::Semicolon, c),
@@ -118,10 +117,16 @@ impl<'a> Scanner<'a> {
             c if Self::is_alpha(&c) => {
                 let mut identifier = String::from(c);
                 let mut c = self.peek_first()?;
+
                 while Self::is_alpha(&c) {
                     identifier.push(c);
+
                     self.advance();
-                    c = self.peek_first()?;
+                    if let Some(next_char) = self.peek_first() {
+                        c = next_char;
+                    } else {
+                        break;
+                    }
                 }
                 if let Some(token) = self.keywords.get(identifier.as_str()) {
                     self.create_token(*token, identifier)

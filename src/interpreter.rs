@@ -1,5 +1,8 @@
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use thiserror::Error;
+
 use crate::{
-    ast::{BinaryExpr, Expr, LiteralExpression, Stmt, UnaryExpr},
+    ast::{BinaryExpr, Expr, LiteralExpr, Stmt, UnaryExpr},
     scanner::TokenKind,
 };
 
@@ -9,6 +12,36 @@ pub enum RoxValue {
     Number(f64),
     Nil,
     Boolean(bool),
+}
+
+impl RoxValue {
+    fn to_rox_number(self: RoxValue) -> Result<f64, RuntimeError> {
+        if let RoxValue::Number(n) = self {
+            Ok(n)
+        } else {
+            Err(RuntimeError {
+                kind: RuntimeErrorKind::TypeError(format!("Expected number got {:?}", self)),
+            })
+        }
+    }
+
+    fn to_rox_string(self) -> Result<String, RuntimeError> {
+        if let RoxValue::String(s) = self {
+            Ok(s)
+        } else {
+            Err(RuntimeError {
+                kind: RuntimeErrorKind::TypeError(format!("Expected string got {:?}", self)),
+            })
+        }
+    }
+
+    fn is_truthy(self: RoxValue) -> bool {
+        match self {
+            RoxValue::Nil => false,
+            RoxValue::Boolean(false) => false,
+            _ => true,
+        }
+    }
 }
 
 impl std::fmt::Display for RoxValue {
@@ -22,130 +55,189 @@ impl std::fmt::Display for RoxValue {
     }
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
+#[error("Runtime Exception: {kind}")]
 pub struct RuntimeError {
     kind: RuntimeErrorKind,
 }
-#[derive(Debug)]
+
+#[derive(Error, Debug)]
 pub enum RuntimeErrorKind {
+    #[error("Type error {0}")]
     TypeError(String),
+    #[error("variable {0} is not defined")]
+    UndefinedVariable(String),
 }
 
 type EvaluationResult = Result<RoxValue, RuntimeError>;
 
-pub fn evaluate_stmt(stmt: Stmt) -> Result<(), RuntimeError> {
-    match stmt {
-        Stmt::Print(expr) => evaluate_expr(expr).map(|c| println!("{c}")),
-        Stmt::ExprStmt(expr) => evaluate_expr(expr).map(|_| ()),
+pub struct Environment {
+    variables: HashMap<String, RoxValue>,
+    enclosing: Option<Rc<RefCell<Environment>>>,
+}
+
+impl Environment {
+    pub fn new(enclosing: Option<Rc<RefCell<Environment>>>) -> Rc<RefCell<Self>> {
+        Rc::new(RefCell::new(Environment {
+            variables: HashMap::new(),
+            enclosing,
+        }))
+    }
+
+    fn declare(&mut self, name: String, value: RoxValue) {
+        self.variables.insert(name, value);
+    }
+
+    fn get(&self, name: String) -> EvaluationResult {
+        let mut variable = self
+            .variables
+            .get(&name)
+            .map(|t| t.clone())
+            .ok_or(RuntimeError {
+                kind: RuntimeErrorKind::UndefinedVariable(name.clone()),
+            });
+        if variable.is_err() && self.enclosing.is_some() {
+            variable = self.enclosing.as_ref().unwrap().borrow().get(name);
+        }
+
+        variable
+    }
+
+    fn assign(&mut self, name: String, value: RoxValue) -> Result<(), RuntimeError> {
+        if self.variables.contains_key(&name) {
+            self.variables.insert(name, value.clone());
+            Ok(())
+        } else if let Some(enclosing) = self.enclosing.as_ref() {
+            enclosing.borrow_mut().assign(name, value)
+        } else {
+            Err(RuntimeError {
+                kind: RuntimeErrorKind::UndefinedVariable(name.clone()),
+            })
+        }
     }
 }
 
-pub fn evaluate_expr(expr: Expr) -> EvaluationResult {
-    match expr {
-        Expr::Literal(l) => Ok(evaluate_literal(l)),
-        Expr::Unary(l) => evalutate_unary(*l),
-        Expr::Binary(l) => evaluate_binary(*l),
-        Expr::Grouping(l) => evaluate_expr(*l),
-    }
+pub trait Evaluate<T = RoxValue> {
+    fn evaluate<'a, 'b>(self, env: Rc<RefCell<Environment>>) -> Result<T, RuntimeError>;
 }
 
-fn evaluate_literal(expr: LiteralExpression) -> RoxValue {
-    match expr {
-        LiteralExpression::Boolean(n) => RoxValue::Boolean(n),
-        LiteralExpression::Number(n) => RoxValue::Number(n),
-        LiteralExpression::String(n) => RoxValue::String(n),
-        LiteralExpression::Nil => RoxValue::Nil,
-    }
-}
+impl Evaluate<()> for Stmt {
+    fn evaluate<'a, 'b>(self, env: Rc<RefCell<Environment>>) -> Result<(), RuntimeError> {
+        match self {
+            Stmt::Block(statements) => {
+                let new_env = Environment::new(Some(env.clone()));
 
-fn evalutate_unary(expr: UnaryExpr) -> EvaluationResult {
-    let right = evaluate_expr(expr.right)?;
-    match expr.operator.kind {
-        TokenKind::Minus => convert_to_number(right).map(|n| RoxValue::Number(-n)),
-        TokenKind::Bang => Ok(RoxValue::Boolean(!is_truthy(right))),
-        _ => unimplemented!(),
-    }
-}
-
-fn evaluate_binary(expr: BinaryExpr) -> EvaluationResult {
-    let left = evaluate_expr(expr.left)?;
-    let right = evaluate_expr(expr.right)?;
-
-    match expr.operator.kind {
-        TokenKind::Plus => {
-            if let Ok(left_number) = convert_to_number(left.clone()) {
-                if let Ok(right_number) = convert_to_number(right) {
-                    Ok(RoxValue::Number(left_number + right_number))
-                } else {
-                    Err(RuntimeError {
-                        kind: RuntimeErrorKind::TypeError(
-                            "Both operands of plus must be string or number".into(),
-                        ),
-                    })
+                for statement in statements {
+                    statement.evaluate(new_env.clone())?
                 }
-            } else if let Ok(mut left_string) = convert_to_string(left) {
-                if let Ok(right_string) = convert_to_string(right) {
-                    left_string.push_str(&right_string);
-                    Ok(RoxValue::String(left_string))
+                Ok(())
+            }
+            Stmt::Print(expr) => expr.evaluate(env).map(|c| println!("{c}")),
+            Stmt::ExprStmt(expr) => expr.evaluate(env).map(|_| ()),
+            Stmt::VarDecl { name, init } => {
+                let init = if let Some(expr) = init {
+                    expr.evaluate(env.clone())?
                 } else {
-                    Err(RuntimeError {
-                        kind: RuntimeErrorKind::TypeError(
-                            "Both operands of plus must be string or number".into(),
-                        ),
-                    })
-                }
-            } else {
-                Err(RuntimeError {
-                    kind: RuntimeErrorKind::TypeError(
-                        "Both operands of plus must be string or number".into(),
-                    ),
-                })
+                    RoxValue::Nil
+                };
+                env.borrow_mut().declare(name, init);
+                Ok(())
             }
         }
-        TokenKind::Minus => {
-            let left_number = convert_to_number(left)?;
-            let right_number = convert_to_number(right)?;
-            Ok(RoxValue::Number(left_number - right_number))
-        }
-
-        TokenKind::Star => {
-            let left_number = convert_to_number(left)?;
-            let right_number = convert_to_number(right)?;
-            Ok(RoxValue::Number(left_number * right_number))
-        }
-        TokenKind::Slash => {
-            let left_number = convert_to_number(left)?;
-            let right_number = convert_to_number(right)?;
-            Ok(RoxValue::Number(left_number / right_number))
-        }
-        _ => unimplemented!(),
     }
 }
 
-fn convert_to_number(eval_expr: RoxValue) -> Result<f64, RuntimeError> {
-    if let RoxValue::Number(n) = eval_expr {
-        Ok(n)
-    } else {
-        Err(RuntimeError {
-            kind: RuntimeErrorKind::TypeError(format!("Expected number got {:?}", eval_expr)),
+impl Evaluate for Expr {
+    fn evaluate(self, env: Rc<RefCell<Environment>>) -> EvaluationResult {
+        match self {
+            Expr::Literal(l) => l.evaluate(env),
+            Expr::Unary(l) => l.evaluate(env),
+            Expr::Binary(l) => l.evaluate(env),
+            Expr::Grouping(l) => l.evaluate(env),
+            Expr::Assign { name, value } => {
+                let value = value.evaluate(env.clone())?;
+                env.borrow_mut().assign(name, value.clone())?;
+                return Ok(value);
+            }
+        }
+    }
+}
+
+impl Evaluate for LiteralExpr {
+    fn evaluate(self, env: Rc<RefCell<Environment>>) -> EvaluationResult {
+        Ok(match self {
+            LiteralExpr::Boolean(n) => RoxValue::Boolean(n),
+            LiteralExpr::Number(n) => RoxValue::Number(n),
+            LiteralExpr::String(n) => RoxValue::String(n),
+            LiteralExpr::Nil => RoxValue::Nil,
+            LiteralExpr::Variable(name) => env.borrow().get(name)?,
         })
     }
 }
 
-fn convert_to_string(eval_expr: RoxValue) -> Result<String, RuntimeError> {
-    if let RoxValue::String(s) = eval_expr {
-        Ok(s)
-    } else {
-        Err(RuntimeError {
-            kind: RuntimeErrorKind::TypeError(format!("Expected string got {:?}", eval_expr)),
-        })
+impl Evaluate for UnaryExpr {
+    fn evaluate(self, env: Rc<RefCell<Environment>>) -> EvaluationResult {
+        let right = self.right.evaluate(env)?;
+        match self.operator.kind {
+            TokenKind::Minus => right.to_rox_number().map(|n| RoxValue::Number(-n)),
+            TokenKind::Bang => Ok(RoxValue::Boolean(!right.is_truthy())),
+            _ => unreachable!(),
+        }
     }
 }
+impl Evaluate for BinaryExpr {
+    fn evaluate(self, env: Rc<RefCell<Environment>>) -> EvaluationResult {
+        let left = self.left.evaluate(env.clone())?;
+        let right = self.right.evaluate(env.clone())?;
 
-fn is_truthy(eval_expr: RoxValue) -> bool {
-    match eval_expr {
-        RoxValue::Nil => false,
-        RoxValue::Boolean(false) => false,
-        _ => true,
+        match self.operator.kind {
+            TokenKind::Plus => {
+                if let Ok(left_number) = left.clone().to_rox_number() {
+                    if let Ok(right_number) = right.to_rox_number() {
+                        Ok(RoxValue::Number(left_number + right_number))
+                    } else {
+                        Err(RuntimeError {
+                            kind: RuntimeErrorKind::TypeError(
+                                "Both operands of plus must be string or number".into(),
+                            ),
+                        })
+                    }
+                } else if let Ok(mut left_string) = left.to_rox_string() {
+                    if let Ok(right_string) = right.to_rox_string() {
+                        left_string.push_str(&right_string);
+                        Ok(RoxValue::String(left_string))
+                    } else {
+                        Err(RuntimeError {
+                            kind: RuntimeErrorKind::TypeError(
+                                "Both operands of plus must be string or number".into(),
+                            ),
+                        })
+                    }
+                } else {
+                    Err(RuntimeError {
+                        kind: RuntimeErrorKind::TypeError(
+                            "Both operands of plus must be string or number".into(),
+                        ),
+                    })
+                }
+            }
+            TokenKind::Minus => {
+                let left_number = left.to_rox_number()?;
+                let right_number = right.to_rox_number()?;
+                Ok(RoxValue::Number(left_number - right_number))
+            }
+
+            TokenKind::Star => {
+                let left_number = left.to_rox_number()?;
+                let right_number = right.to_rox_number()?;
+                Ok(RoxValue::Number(left_number * right_number))
+            }
+            TokenKind::Slash => {
+                let left_number = left.to_rox_number()?;
+                let right_number = right.to_rox_number()?;
+                Ok(RoxValue::Number(left_number / right_number))
+            }
+            _ => unreachable!(),
+        }
     }
 }

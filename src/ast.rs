@@ -4,22 +4,26 @@ use crate::scanner::Token;
 pub enum Stmt {
     Print(Expr),
     ExprStmt(Expr),
+    VarDecl { name: String, init: Option<Expr> },
+    Block(Vec<Stmt>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     Binary(Box<BinaryExpr>),
     Grouping(Box<Expr>),
-    Literal(LiteralExpression),
+    Literal(LiteralExpr),
     Unary(Box<UnaryExpr>),
+    Assign { name: String, value: Box<Expr> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum LiteralExpression {
+pub enum LiteralExpr {
     Nil,
     Boolean(bool),
     Number(f64),
     String(String),
+    Variable(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
