@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use thiserror::Error;
 
 use crate::{
-    ast::{BinaryExpr, Expr, LiteralExpr, Stmt, UnaryExpr},
+    ast::{BinaryExpr, Expr, LiteralExpr, LogicalExpr, Stmt, UnaryExpr},
     scanner::TokenKind,
 };
 
@@ -35,7 +35,7 @@ impl RoxValue {
         }
     }
 
-    fn is_truthy(self: RoxValue) -> bool {
+    fn is_truthy(self: &RoxValue) -> bool {
         match self {
             RoxValue::Nil => false,
             RoxValue::Boolean(false) => false,
@@ -143,6 +143,26 @@ impl Evaluate<()> for Stmt {
                 env.borrow_mut().declare(name, init);
                 Ok(())
             }
+            Stmt::IfElse {
+                pred,
+                if_branch,
+                else_branch,
+            } => {
+                if pred.evaluate(env.clone())?.is_truthy() {
+                    if_branch.evaluate(env.clone())?;
+                } else {
+                    if let Some(s) = else_branch {
+                        s.evaluate(env.clone())?;
+                    }
+                }
+                Ok(())
+            }
+            Stmt::WhileLoop { pred, body } => {
+                while pred.clone().evaluate(env.clone())?.is_truthy() {
+                    body.clone().evaluate(env.clone())?
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -154,6 +174,7 @@ impl Evaluate for Expr {
             Expr::Unary(l) => l.evaluate(env),
             Expr::Binary(l) => l.evaluate(env),
             Expr::Grouping(l) => l.evaluate(env),
+            Expr::Logical(t) => t.evaluate(env),
             Expr::Assign { name, value } => {
                 let value = value.evaluate(env.clone())?;
                 env.borrow_mut().assign(name, value.clone())?;
@@ -185,6 +206,7 @@ impl Evaluate for UnaryExpr {
         }
     }
 }
+
 impl Evaluate for BinaryExpr {
     fn evaluate(self, env: Rc<RefCell<Environment>>) -> EvaluationResult {
         let left = self.left.evaluate(env.clone())?;
@@ -236,6 +258,39 @@ impl Evaluate for BinaryExpr {
                 let left_number = left.to_rox_number()?;
                 let right_number = right.to_rox_number()?;
                 Ok(RoxValue::Number(left_number / right_number))
+            }
+            TokenKind::Greater => {
+                let left_number = left.to_rox_number()?;
+                let right_number = right.to_rox_number()?;
+                Ok(RoxValue::Boolean(left_number > right_number))
+            }
+            TokenKind::Less => {
+                let left_number = left.to_rox_number()?;
+                let right_number = right.to_rox_number()?;
+                Ok(RoxValue::Boolean(left_number < right_number))
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Evaluate for LogicalExpr {
+    fn evaluate(self, env: Rc<RefCell<Environment>>) -> EvaluationResult {
+        let left = self.left.evaluate(env.clone())?;
+        match self.operator.kind {
+            TokenKind::And => {
+                if left.is_truthy() {
+                    self.right.evaluate(env)
+                } else {
+                    Ok(left)
+                }
+            }
+            TokenKind::Or => {
+                if left.is_truthy() {
+                    Ok(left)
+                } else {
+                    self.right.evaluate(env.clone())
+                }
             }
             _ => unreachable!(),
         }

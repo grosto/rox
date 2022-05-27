@@ -1,5 +1,5 @@
 use crate::{
-    ast::{BinaryExpr, Expr, LiteralExpr, Stmt, UnaryExpr},
+    ast::{BinaryExpr, Expr, LiteralExpr, LogicalExpr, Stmt, UnaryExpr},
     scanner::{LiteralToken, Token, TokenKind},
 };
 
@@ -79,22 +79,112 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         let stmt = match next_token.kind {
             TokenKind::Print => {
                 self.tokens.next();
-                Stmt::Print(self.expression()?)
+                let stmt = Stmt::Print(self.expression()?);
+                self.ensure_next_token(TokenKind::Semicolon)?;
+                stmt
             }
             TokenKind::LeftBrace => {
                 self.tokens.next();
                 Stmt::Block(self.block_statement()?)
             }
-            _ => Stmt::ExprStmt(self.expression()?),
-        };
-        match stmt {
-            Stmt::Block(_) => {}
-            _ => {
-                self.ensure_next_token(TokenKind::Semicolon)?;
+            TokenKind::If => {
+                self.tokens.next();
+                self.if_else_statement()?
             }
+            TokenKind::While => {
+                self.tokens.next();
+                self.while_loop()?
+            }
+            TokenKind::For => {
+                self.tokens.next();
+                self.for_loop()?
+            }
+            _ => self.expr_statement()?,
         };
 
         Ok(stmt)
+    }
+
+    fn expr_statement(&mut self) -> Result<Stmt, ParseError> {
+        let expr = Ok(Stmt::ExprStmt(self.expression()?));
+        self.ensure_next_token(TokenKind::Semicolon)?;
+        expr
+    }
+
+    fn if_else_statement(&mut self) -> Result<Stmt, ParseError> {
+        self.ensure_next_token(TokenKind::LeftParen)?;
+        let pred = self.expression()?;
+        self.ensure_next_token(TokenKind::RightParen)?;
+        let left = Box::new(self.statement()?);
+        let right = if let Some(_) = self.advance_on_match(&[TokenKind::Else]) {
+            Some(Box::new(self.statement()?))
+        } else {
+            None
+        };
+        Ok(Stmt::IfElse {
+            pred,
+            if_branch: left,
+            else_branch: right,
+        })
+    }
+
+    fn while_loop(&mut self) -> Result<Stmt, ParseError> {
+        self.ensure_next_token(TokenKind::LeftParen)?;
+        let pred = self.expression()?;
+        self.ensure_next_token(TokenKind::RightParen)?;
+        let body = Box::new(self.statement()?);
+
+        Ok(Stmt::WhileLoop { pred, body })
+    }
+
+    fn for_loop(&mut self) -> Result<Stmt, ParseError> {
+        self.ensure_next_token(TokenKind::LeftParen)?;
+
+        let init = if self.advance_on_match(&[TokenKind::Semicolon]).is_none() {
+            if self.advance_on_match(&[TokenKind::Var]).is_some() {
+                Some(self.var_decl()?)
+            } else {
+                Some(self.expr_statement()?)
+            }
+        } else {
+            None
+        };
+
+        let condition = if self.advance_on_match(&[TokenKind::Semicolon]).is_none() {
+            let expr = Some(self.expression()?);
+            self.ensure_next_token(TokenKind::Semicolon)?;
+            expr
+        } else {
+            None
+        };
+
+        let increment = if self.advance_on_match(&[TokenKind::Semicolon]).is_none() {
+            Some(self.expression()?)
+        } else {
+            None
+        };
+
+        self.ensure_next_token(TokenKind::RightParen)?;
+        let body = self.statement()?;
+        let body = if let Some(expr) = increment {
+            Stmt::Block(vec![body, Stmt::ExprStmt(expr)])
+        } else {
+            body
+        };
+
+        let condition = condition.unwrap_or(Expr::Literal(LiteralExpr::Boolean(true)));
+        let while_loop = Stmt::WhileLoop {
+            pred: condition,
+            body: Box::new(body),
+        };
+
+        let block = if let Some(init) = init {
+            Stmt::Block(vec![init, while_loop])
+        } else {
+            while_loop
+        };
+
+        Ok(block)
     }
 
     fn block_statement(&mut self) -> Result<Vec<Stmt>, ParseError> {
@@ -121,7 +211,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
     }
 
     fn assignment(&mut self) -> Result<Expr, ParseError> {
-        let expr = self.equality()?;
+        let expr = self.logical_or()?;
 
         while self.advance_on_match(&[TokenKind::Equal]).is_some() {
             let value = self.assignment()?;
@@ -138,6 +228,36 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 message: "Invalid assigment target".into(),
             });
         }
+        Ok(expr)
+    }
+
+    fn logical_or(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.logical_and()?;
+
+        while let Some(operator) = self.advance_on_match(&[TokenKind::Or]) {
+            let right = self.comparison()?;
+            expr = Expr::Logical(Box::new(LogicalExpr {
+                left: expr,
+                right,
+                operator,
+            }))
+        }
+
+        Ok(expr)
+    }
+
+    fn logical_and(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.equality()?;
+
+        while let Some(operator) = self.advance_on_match(&[TokenKind::And]) {
+            let right = self.comparison()?;
+            expr = Expr::Logical(Box::new(LogicalExpr {
+                left: expr,
+                right,
+                operator,
+            }))
+        }
+
         Ok(expr)
     }
 

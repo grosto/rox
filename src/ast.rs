@@ -4,8 +4,20 @@ use crate::scanner::Token;
 pub enum Stmt {
     Print(Expr),
     ExprStmt(Expr),
-    VarDecl { name: String, init: Option<Expr> },
+    VarDecl {
+        name: String,
+        init: Option<Expr>,
+    },
     Block(Vec<Stmt>),
+    IfElse {
+        pred: Expr,
+        if_branch: Box<Stmt>,
+        else_branch: Option<Box<Stmt>>,
+    },
+    WhileLoop {
+        pred: Expr,
+        body: Box<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -14,6 +26,7 @@ pub enum Expr {
     Grouping(Box<Expr>),
     Literal(LiteralExpr),
     Unary(Box<UnaryExpr>),
+    Logical(Box<LogicalExpr>),
     Assign { name: String, value: Box<Expr> },
 }
 
@@ -36,5 +49,12 @@ pub struct UnaryExpr {
 pub struct BinaryExpr {
     pub left: Expr,
     pub operator: Token,
+    pub right: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LogicalExpr {
+    pub operator: Token,
+    pub left: Expr,
     pub right: Expr,
 }
