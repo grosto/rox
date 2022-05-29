@@ -27,7 +27,14 @@ pub enum Expr {
     Literal(LiteralExpr),
     Unary(Box<UnaryExpr>),
     Logical(Box<LogicalExpr>),
-    Assign { name: String, value: Box<Expr> },
+    Call {
+        expr: Box<Expr>,
+        arguments: Vec<Expr>,
+    },
+    Assign {
+        name: String,
+        value: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

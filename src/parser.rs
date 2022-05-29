@@ -323,6 +323,7 @@ impl<I: Iterator<Item = Token>> Parser<I> {
 
         Ok(expr)
     }
+
     fn unary(&mut self) -> Result<Expr, ParseError> {
         if let Some(operator) = self.advance_on_match(&[TokenKind::Bang, TokenKind::Minus]) {
             let expr = self.unary()?;
@@ -331,8 +332,40 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 right: expr,
             })));
         } else {
-            self.primary()
+            self.call()
         }
+    }
+
+    fn call(&mut self) -> Result<Expr, ParseError> {
+        let mut expr = self.primary()?;
+
+        loop {
+            if self.advance_on_match(&[TokenKind::LeftParen]).is_some() {
+                let mut arguments = vec![];
+                let closing_paren = self.advance_on_match(&[TokenKind::RightParen]);
+                if let Some(_) = closing_paren {
+                    expr = Expr::Call {
+                        expr: Box::new(expr),
+                        arguments,
+                    };
+                } else {
+                    arguments.push(self.expression()?);
+                    while self.advance_on_match(&[TokenKind::Comma]).is_some() {
+                        arguments.push(self.expression()?);
+                    }
+                    self.ensure_next_token(TokenKind::RightParen)?;
+                    expr = Expr::Call {
+                        expr: Box::new(expr),
+
+                        arguments,
+                    };
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(expr)
     }
 
     fn primary(&mut self) -> Result<Expr, ParseError> {
