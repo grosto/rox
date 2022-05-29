@@ -1,27 +1,30 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    fs,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use crate::interpreter::{Callable, EvaluationResult, RoxValue, WrappedEnvironment};
+use crate::interpreter::{NativeFnValue, RoxValue};
 
-#[derive(Clone, Debug)]
-pub struct ClockNativeFn {}
-
-impl Callable for ClockNativeFn {
-    fn arity(&self) -> u16 {
-        0
-    }
-
-    fn call(&self, _env: WrappedEnvironment, _arguments: Vec<RoxValue>) -> EvaluationResult {
+pub const CLOCK_NATIVE_FN: NativeFnValue = NativeFnValue {
+    name: "clock",
+    arity: 0,
+    native_fn: |_args: Vec<RoxValue>| {
         Ok(RoxValue::Number(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis() as f64,
         ))
-    }
+    },
+};
 
-    fn name(&self) -> String {
-        "clock".into()
-    }
-}
+pub const READ_FILE_NATIVE_FN: NativeFnValue = NativeFnValue {
+    name: "read_file",
+    arity: 1,
+    native_fn: |args: Vec<RoxValue>| {
+        let filename = args[0].clone().to_rox_string()?;
 
-pub const CLOCK_NATIVE_FN: ClockNativeFn = ClockNativeFn {};
+        let content = fs::read_to_string(filename).expect("Something went wrong reading the file");
+        Ok(RoxValue::String(content))
+    },
+};

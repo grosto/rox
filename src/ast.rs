@@ -8,6 +8,11 @@ pub enum Stmt {
         name: String,
         init: Option<Expr>,
     },
+    FunDecl {
+        name: String,
+        params: Vec<Token>,
+        body: Vec<Stmt>,
+    },
     Block(Vec<Stmt>),
     IfElse {
         pred: Expr,

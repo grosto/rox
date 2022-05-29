@@ -3,8 +3,8 @@ use thiserror::Error;
 
 use crate::{
     ast::{BinaryExpr, Expr, LiteralExpr, LogicalExpr, Stmt, UnaryExpr},
-    globals::CLOCK_NATIVE_FN,
-    scanner::TokenKind,
+    globals::{CLOCK_NATIVE_FN, READ_FILE_NATIVE_FN},
+    scanner::{Token, TokenKind},
 };
 
 pub type WrappedEnvironment = Rc<RefCell<Environment>>;
@@ -15,35 +15,66 @@ pub enum RoxValue {
     Number(f64),
     Nil,
     Boolean(bool),
-    NativeFn(Box<dyn Callable>),
+    Function(FnValue),
+    NativeFn(NativeFnValue),
 }
 
-pub trait CallableClonable {
-    fn clone_box(&self) -> Box<dyn Callable>;
+#[derive(Clone, Debug)]
+pub struct NativeFnValue {
+    pub name: &'static str,
+    pub arity: usize,
+    pub native_fn: fn(Vec<RoxValue>) -> EvaluationResult,
 }
 
-impl<T> CallableClonable for T
-where
-    T: 'static + Callable + Clone,
-{
-    fn clone_box(&self) -> Box<dyn Callable> {
-        Box::new(self.clone())
-    }
+#[derive(Clone, Debug)]
+pub struct FnValue {
+    name: String,
+    params: Vec<Token>,
+    body: Vec<Stmt>,
 }
 
-impl Clone for Box<dyn Callable> {
-    fn clone(&self) -> Box<dyn Callable> {
-        self.clone_box()
-    }
-}
-pub trait Callable: std::fmt::Debug + CallableClonable {
-    fn arity(&self) -> u16;
+pub trait Callable: std::fmt::Debug {
+    fn arity(&self) -> usize;
     fn call(&self, env: WrappedEnvironment, arguments: Vec<RoxValue>) -> EvaluationResult;
     fn name(&self) -> String;
 }
 
+impl Callable for FnValue {
+    fn arity(&self) -> usize {
+        self.params.len()
+    }
+    fn call(&self, env: WrappedEnvironment, arguments: Vec<RoxValue>) -> EvaluationResult {
+        let new_env = Environment::new(Some(env.clone()));
+        for (index, token) in self.params.iter().enumerate() {
+            new_env
+                .borrow_mut()
+                .declare(token.lexem.clone(), arguments[index].clone())
+        }
+
+        for statement in self.body.clone() {
+            statement.evaluate(new_env.clone())?
+        }
+        return Ok(RoxValue::Nil);
+    }
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+}
+
+impl Callable for NativeFnValue {
+    fn arity(&self) -> usize {
+        self.arity
+    }
+    fn call(&self, _env: WrappedEnvironment, arguments: Vec<RoxValue>) -> EvaluationResult {
+        (self.native_fn)(arguments)
+    }
+    fn name(&self) -> String {
+        self.name.into()
+    }
+}
+
 impl RoxValue {
-    fn to_rox_number(self: RoxValue) -> Result<f64, RuntimeError> {
+    pub fn to_rox_number(self: RoxValue) -> Result<f64, RuntimeError> {
         if let RoxValue::Number(n) = self {
             Ok(n)
         } else {
@@ -53,7 +84,7 @@ impl RoxValue {
         }
     }
 
-    fn to_rox_string(self) -> Result<String, RuntimeError> {
+    pub fn to_rox_string(self) -> Result<String, RuntimeError> {
         if let RoxValue::String(s) = self {
             Ok(s)
         } else {
@@ -63,7 +94,7 @@ impl RoxValue {
         }
     }
 
-    fn is_truthy(self: &RoxValue) -> bool {
+    pub fn is_truthy(self: &RoxValue) -> bool {
         match self {
             RoxValue::Nil => false,
             RoxValue::Boolean(false) => false,
@@ -79,7 +110,8 @@ impl std::fmt::Display for RoxValue {
             RoxValue::Number(s) => write!(f, "{s}"),
             RoxValue::Boolean(s) => write!(f, "{s}"),
             RoxValue::Nil => write!(f, "nil"),
-            RoxValue::NativeFn(s) => write!(f, "native function: {}", s.name()),
+            RoxValue::NativeFn(s) => write!(f, "native function: {}", s.name),
+            RoxValue::Function(s) => write!(f, "native function: {}", s.name),
         }
     }
 }
@@ -98,6 +130,11 @@ pub enum RuntimeErrorKind {
     UndefinedVariable(String),
     #[error("expression is not callable")]
     CalleeIsNotCallable,
+    #[error("Invalid argument count expected: {param_len} but got {arguments_len}.")]
+    MismatchedArgumentsAndParameters {
+        arguments_len: usize,
+        param_len: usize,
+    },
 }
 
 pub type EvaluationResult = Result<RoxValue, RuntimeError>;
@@ -110,10 +147,8 @@ pub struct Environment {
 impl Environment {
     pub fn global() -> Rc<RefCell<Self>> {
         let mut global_variables = HashMap::new();
-        global_variables.insert(
-            "clock".into(),
-            RoxValue::NativeFn(Box::new(CLOCK_NATIVE_FN)),
-        );
+        global_variables.insert("clock".into(), RoxValue::NativeFn(CLOCK_NATIVE_FN));
+        global_variables.insert("read_file".into(), RoxValue::NativeFn(READ_FILE_NATIVE_FN));
         Rc::new(RefCell::new(Environment {
             variables: global_variables,
             enclosing: None,
@@ -186,6 +221,13 @@ impl Evaluate<()> for Stmt {
                 env.borrow_mut().declare(name, init);
                 Ok(())
             }
+            Stmt::FunDecl { name, body, params } => {
+                env.borrow_mut().declare(
+                    name.clone(),
+                    RoxValue::Function(FnValue { name, params, body }),
+                );
+                Ok(())
+            }
             Stmt::IfElse {
                 pred,
                 if_branch,
@@ -225,12 +267,40 @@ impl Evaluate for Expr {
             }
             Expr::Call { expr, arguments } => {
                 let callee = expr.evaluate(env.clone())?;
-                let mut evaluated_arguments = Vec::with_capacity(arguments.len());
-                for argument in arguments {
-                    evaluated_arguments.push(argument.evaluate(env.clone())?)
-                }
+
                 match callee {
-                    RoxValue::NativeFn(function) => function.call(env.clone(), evaluated_arguments),
+                    RoxValue::NativeFn(function) => {
+                        if arguments.len() != function.arity() {
+                            return Err(RuntimeError {
+                                kind: RuntimeErrorKind::MismatchedArgumentsAndParameters {
+                                    arguments_len: arguments.len(),
+                                    param_len: function.arity(),
+                                },
+                            });
+                        }
+                        let mut evaluated_arguments = Vec::with_capacity(arguments.len());
+                        for argument in arguments {
+                            evaluated_arguments.push(argument.evaluate(env.clone())?)
+                        }
+
+                        function.call(env.clone(), evaluated_arguments)
+                    }
+                    RoxValue::Function(function) => {
+                        if arguments.len() != function.arity() {
+                            return Err(RuntimeError {
+                                kind: RuntimeErrorKind::MismatchedArgumentsAndParameters {
+                                    arguments_len: arguments.len(),
+                                    param_len: function.arity(),
+                                },
+                            });
+                        }
+                        let mut evaluated_arguments = Vec::with_capacity(arguments.len());
+                        for argument in arguments {
+                            evaluated_arguments.push(argument.evaluate(env.clone())?)
+                        }
+
+                        function.call(env.clone(), evaluated_arguments)
+                    }
                     _ => Err(RuntimeError {
                         kind: RuntimeErrorKind::CalleeIsNotCallable,
                     }),

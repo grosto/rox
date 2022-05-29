@@ -46,6 +46,10 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 self.tokens.next();
                 self.var_decl()
             }
+            TokenKind::Fun => {
+                self.tokens.next();
+                self.function()
+            }
             _ => self.statement(),
         }
     }
@@ -68,6 +72,35 @@ impl<I: Iterator<Item = Token>> Parser<I> {
         };
 
         self.ensure_next_token(TokenKind::Semicolon).map(|_| stmt)
+    }
+
+    fn function(&mut self) -> Result<Stmt, ParseError> {
+        let identifer = self.ensure_next_token(TokenKind::Literal {
+            kind: LiteralToken::Identifier,
+        })?;
+        self.ensure_next_token(TokenKind::LeftParen)?;
+        let mut params = vec![];
+        let closing_paren = self.advance_on_match(&[TokenKind::RightParen]);
+        if closing_paren.is_none() {
+            params.push(self.ensure_next_token(TokenKind::Literal {
+                kind: LiteralToken::Identifier,
+            })?);
+            while self.advance_on_match(&[TokenKind::Comma]).is_some() {
+                params.push(self.ensure_next_token(TokenKind::Literal {
+                    kind: LiteralToken::Identifier,
+                })?);
+            }
+            self.ensure_next_token(TokenKind::RightParen)?;
+        }
+
+        self.ensure_next_token(TokenKind::LeftBrace)?;
+        let body = self.block_statement()?;
+
+        Ok(Stmt::FunDecl {
+            name: identifer.lexem,
+            params: params,
+            body,
+        })
     }
 
     fn statement(&mut self) -> Result<Stmt, ParseError> {
