@@ -111,7 +111,7 @@ impl std::fmt::Display for RoxValue {
             RoxValue::Boolean(s) => write!(f, "{s}"),
             RoxValue::Nil => write!(f, "nil"),
             RoxValue::NativeFn(s) => write!(f, "native function: {}", s.name),
-            RoxValue::Function(s) => write!(f, "native function: {}", s.name),
+            RoxValue::Function(s) => write!(f, "function: {}", s.name),
         }
     }
 }
@@ -421,4 +421,15 @@ impl Evaluate for LogicalExpr {
             _ => unreachable!(),
         }
     }
+}
+
+pub fn evaluate_statements(
+    statements: Vec<Stmt>,
+    env: WrappedEnvironment,
+) -> Result<(), RuntimeError> {
+    for statement in statements {
+        statement.evaluate(env.clone())?
+    }
+
+    Ok(())
 }

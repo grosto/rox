@@ -1,10 +1,15 @@
 use crate::{
     ast::{BinaryExpr, Expr, LiteralExpr, LogicalExpr, Stmt, UnaryExpr},
-    scanner::{LiteralToken, Token, TokenKind},
+    scanner::{LiteralToken, Scanner, Token, TokenKind},
 };
 
 use std::iter::Peekable;
 use thiserror::Error;
+
+pub fn parse_source_code(source_code: &str) -> Result<Vec<Stmt>, ParseError> {
+    Parser::new(Scanner::new(&source_code)).parse()
+}
+
 pub struct Parser<I>
 where
     I: Iterator<Item = Token>,

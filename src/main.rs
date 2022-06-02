@@ -1,14 +1,15 @@
+mod analysis;
 mod ast;
 mod globals;
 mod interpreter;
 mod parser;
 mod scanner;
 
-use crate::interpreter::WrappedEnvironment;
-use crate::interpreter::{Environment, Evaluate};
-use crate::parser::Parser;
-use crate::scanner::Scanner;
+use crate::interpreter::{Environment, WrappedEnvironment};
+use analysis::analyze_statements;
 use anyhow::Result;
+use interpreter::evaluate_statements;
+use parser::parse_source_code;
 use std::env;
 use std::fs;
 use std::io;
@@ -36,12 +37,9 @@ fn run_file(file_path: &path::Path) -> Result<()> {
 }
 
 fn run(source: String, env: WrappedEnvironment) -> Result<()> {
-    let scanner = Scanner::new(&source);
-    let mut parser = Parser::new(scanner);
-    let statements = parser.parse()?;
-    for statement in statements {
-        statement.evaluate(env.clone())?
-    }
+    let statements = parse_source_code(&source)?;
+    analyze_statements(&statements);
+    evaluate_statements(statements, env)?;
     Ok(())
 }
 

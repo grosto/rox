@@ -1,8 +1,9 @@
-var a = 1;
-
-
-for (;; a = a + 1) {
-   print a;
+fun test(a, b, c, d, e, f) {
+  var c = 3;
+  print test;
+  print b;
+  print c;
 }
 
-print "done";
+test(1, 2, 3, 4, 5, 6);
+
