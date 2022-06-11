@@ -137,12 +137,27 @@ impl<I: Iterator<Item = Token>> Parser<I> {
                 self.tokens.next();
                 self.for_loop()?
             }
+            TokenKind::Return => {
+                self.tokens.next();
+                self.return_statement()?
+            }
             _ => self.expr_statement()?,
         };
 
         Ok(stmt)
     }
 
+    fn return_statement(&mut self) -> Result<Stmt, ParseError> {
+        let expr = if self.advance_on_match(&[TokenKind::Semicolon]).is_none() {
+            let expr = Some(self.expression()?);
+            self.ensure_next_token(TokenKind::Semicolon)?;
+            expr
+        } else {
+            None
+        };
+
+        Ok(Stmt::Return(expr))
+    }
     fn expr_statement(&mut self) -> Result<Stmt, ParseError> {
         let expr = Ok(Stmt::ExprStmt(self.expression()?));
         self.ensure_next_token(TokenKind::Semicolon)?;

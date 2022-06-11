@@ -23,6 +23,7 @@ pub enum Stmt {
         pred: Expr,
         body: Box<Stmt>,
     },
+    Return(Option<Expr>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

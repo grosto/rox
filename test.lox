@@ -1,9 +1,9 @@
-fun test(a, b, c, d, e, f) {
-  var c = 3;
-  print test;
-  print b;
-  print c;
+fun count(n) {
+  while (n < 1000) {
+    print n;
+    if (n == 3) return n;
+    n = n + 1;
+  }
 }
 
-test(1, 2, 3, 4, 5, 6);
-
+print count(1);

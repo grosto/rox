@@ -9,7 +9,12 @@ use crate::{
 
 pub type WrappedEnvironment = Rc<RefCell<Environment>>;
 
-#[derive(Clone, Debug)]
+pub enum CompletionRecord {
+    Normal,
+    Return(RoxValue),
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum RoxValue {
     String(String),
     Number(f64),
@@ -19,14 +24,14 @@ pub enum RoxValue {
     NativeFn(NativeFnValue),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NativeFnValue {
     pub name: &'static str,
     pub arity: usize,
     pub native_fn: fn(Vec<RoxValue>) -> EvaluationResult,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FnValue {
     name: String,
     params: Vec<Token>,
@@ -35,7 +40,11 @@ pub struct FnValue {
 
 pub trait Callable: std::fmt::Debug {
     fn arity(&self) -> usize;
-    fn call(&self, env: WrappedEnvironment, arguments: Vec<RoxValue>) -> EvaluationResult;
+    fn call(
+        &self,
+        env: WrappedEnvironment,
+        arguments: Vec<RoxValue>,
+    ) -> Result<CompletionRecord, RuntimeError>;
     fn name(&self) -> String;
 }
 
@@ -43,7 +52,11 @@ impl Callable for FnValue {
     fn arity(&self) -> usize {
         self.params.len()
     }
-    fn call(&self, env: WrappedEnvironment, arguments: Vec<RoxValue>) -> EvaluationResult {
+    fn call(
+        &self,
+        env: WrappedEnvironment,
+        arguments: Vec<RoxValue>,
+    ) -> Result<CompletionRecord, RuntimeError> {
         let new_env = Environment::new(Some(env.clone()));
         for (index, token) in self.params.iter().enumerate() {
             new_env
@@ -52,9 +65,14 @@ impl Callable for FnValue {
         }
 
         for statement in self.body.clone() {
-            statement.evaluate(new_env.clone())?
+            let result = statement.evaluate(new_env.clone())?;
+            match result {
+                CompletionRecord::Return(_) => return Ok(result),
+                _ => {}
+            }
         }
-        return Ok(RoxValue::Nil);
+
+        return Ok(CompletionRecord::Normal);
     }
     fn name(&self) -> String {
         self.name.clone()
@@ -65,8 +83,12 @@ impl Callable for NativeFnValue {
     fn arity(&self) -> usize {
         self.arity
     }
-    fn call(&self, _env: WrappedEnvironment, arguments: Vec<RoxValue>) -> EvaluationResult {
-        (self.native_fn)(arguments)
+    fn call(
+        &self,
+        _env: WrappedEnvironment,
+        arguments: Vec<RoxValue>,
+    ) -> Result<CompletionRecord, RuntimeError> {
+        Ok(CompletionRecord::Return((self.native_fn)(arguments)?))
     }
     fn name(&self) -> String {
         self.name.into()
@@ -94,7 +116,7 @@ impl RoxValue {
         }
     }
 
-    pub fn is_truthy(self: &RoxValue) -> bool {
+    pub fn is_truthy(&self) -> bool {
         match self {
             RoxValue::Nil => false,
             RoxValue::Boolean(false) => false,
@@ -199,19 +221,27 @@ pub trait Evaluate<T = RoxValue> {
     fn evaluate<'a, 'b>(self, env: WrappedEnvironment) -> Result<T, RuntimeError>;
 }
 
-impl Evaluate<()> for Stmt {
-    fn evaluate<'a, 'b>(self, env: WrappedEnvironment) -> Result<(), RuntimeError> {
+impl Evaluate<CompletionRecord> for Stmt {
+    fn evaluate<'a, 'b>(self, env: WrappedEnvironment) -> Result<CompletionRecord, RuntimeError> {
         match self {
             Stmt::Block(statements) => {
                 let new_env = Environment::new(Some(env.clone()));
 
                 for statement in statements {
-                    statement.evaluate(new_env.clone())?
+                    let result = statement.evaluate(new_env.clone())?;
+                    match result {
+                        CompletionRecord::Return(_) => return Ok(result),
+                        _ => {}
+                    }
                 }
-                Ok(())
+
+                Ok(CompletionRecord::Normal)
             }
-            Stmt::Print(expr) => expr.evaluate(env).map(|c| println!("{c}")),
-            Stmt::ExprStmt(expr) => expr.evaluate(env).map(|_| ()),
+            Stmt::Print(expr) => expr.evaluate(env).map(|c| {
+                println!("{c}");
+                CompletionRecord::Normal
+            }),
+            Stmt::ExprStmt(expr) => expr.evaluate(env).map(|_| CompletionRecord::Normal),
             Stmt::VarDecl { name, init } => {
                 let init = if let Some(expr) = init {
                     expr.evaluate(env.clone())?
@@ -219,14 +249,14 @@ impl Evaluate<()> for Stmt {
                     RoxValue::Nil
                 };
                 env.borrow_mut().declare(name, init);
-                Ok(())
+                Ok(CompletionRecord::Normal)
             }
             Stmt::FunDecl { name, body, params } => {
                 env.borrow_mut().declare(
                     name.clone(),
                     RoxValue::Function(FnValue { name, params, body }),
                 );
-                Ok(())
+                Ok(CompletionRecord::Normal)
             }
             Stmt::IfElse {
                 pred,
@@ -234,19 +264,40 @@ impl Evaluate<()> for Stmt {
                 else_branch,
             } => {
                 if pred.evaluate(env.clone())?.is_truthy() {
-                    if_branch.evaluate(env.clone())?;
+                    let result = if_branch.evaluate(env.clone())?;
+                    match result {
+                        CompletionRecord::Return(_) => return Ok(result),
+                        _ => {}
+                    }
                 } else {
                     if let Some(s) = else_branch {
-                        s.evaluate(env.clone())?;
+                        let result = s.evaluate(env.clone())?;
+                        match result {
+                            CompletionRecord::Return(_) => return Ok(result),
+                            _ => {}
+                        }
                     }
                 }
-                Ok(())
+                Ok(CompletionRecord::Normal)
             }
             Stmt::WhileLoop { pred, body } => {
                 while pred.clone().evaluate(env.clone())?.is_truthy() {
-                    body.clone().evaluate(env.clone())?
+                    let result = body.clone().evaluate(env.clone())?;
+                    match result {
+                        CompletionRecord::Return(_) => return Ok(result),
+                        _ => {}
+                    }
                 }
-                Ok(())
+                Ok(CompletionRecord::Normal)
+            }
+            Stmt::Return(expr) => {
+                let value = if let Some(expr) = expr {
+                    expr.evaluate(env.clone())?
+                } else {
+                    RoxValue::Nil
+                };
+
+                Ok(CompletionRecord::Return(value))
             }
         }
     }
@@ -283,7 +334,11 @@ impl Evaluate for Expr {
                             evaluated_arguments.push(argument.evaluate(env.clone())?)
                         }
 
-                        function.call(env.clone(), evaluated_arguments)
+                        let result = match function.call(env.clone(), evaluated_arguments)? {
+                            CompletionRecord::Return(expr) => expr,
+                            CompletionRecord::Normal => RoxValue::Nil,
+                        };
+                        Ok(result)
                     }
                     RoxValue::Function(function) => {
                         if arguments.len() != function.arity() {
@@ -299,7 +354,11 @@ impl Evaluate for Expr {
                             evaluated_arguments.push(argument.evaluate(env.clone())?)
                         }
 
-                        function.call(env.clone(), evaluated_arguments)
+                        let result = match function.call(env.clone(), evaluated_arguments)? {
+                            CompletionRecord::Return(expr) => expr,
+                            CompletionRecord::Normal => RoxValue::Nil,
+                        };
+                        Ok(result)
                     }
                     _ => Err(RuntimeError {
                         kind: RuntimeErrorKind::CalleeIsNotCallable,
@@ -395,6 +454,7 @@ impl Evaluate for BinaryExpr {
                 let right_number = right.to_rox_number()?;
                 Ok(RoxValue::Boolean(left_number < right_number))
             }
+            TokenKind::EqualEqual => Ok(RoxValue::Boolean(left == right)),
             _ => unreachable!(),
         }
     }
@@ -426,10 +486,10 @@ impl Evaluate for LogicalExpr {
 pub fn evaluate_statements(
     statements: Vec<Stmt>,
     env: WrappedEnvironment,
-) -> Result<(), RuntimeError> {
+) -> Result<CompletionRecord, RuntimeError> {
     for statement in statements {
-        statement.evaluate(env.clone())?
+        statement.evaluate(env.clone())?;
     }
 
-    Ok(())
+    Ok(CompletionRecord::Normal)
 }
